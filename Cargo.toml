@@ -1,0 +1,13 @@
+[package]
+name = "superzub"
+version = "0.1.0"
+authors = ["rogday <rogday@test.com>"]
+edition = "2018"
+
+[[bin]]
+name = "superzub"
+path = "src/main.rs"
+
+[[bin]]
+name = "factoriadic"
+path = "src/factoriadic.rs"
