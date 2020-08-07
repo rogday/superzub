@@ -21,14 +21,17 @@ use std::collections::{hash_map::Entry, HashMap};
 
 #[derive(Debug)]
 enum SolveError {
-    _AlphabetMismatch,
+    InputSizeMismatch,
+    OutputSizeMismatch,
+
+    AlphabetMismatch,
+
     Unsolvable,
 }
 
 struct Trace {
-    /// According to Wiki, the longest optimal solution is 80 moves long.
-    inner: Vec<u32>,
-
+    // According to Wiki, the longest optimal solution is 80 moves long.
+    inner:   Vec<u32>,
     mapping: HashMap<u32, char>,
 }
 
@@ -101,6 +104,7 @@ macro_rules! gen_functions {
 
             // every cell is represented using 3 bits, this converts change of
             // position into amount of bits that need to be shifted
+            #[allow(clippy::neg_multiply)]
             const SHIFT: i32 = $delta_pos * 3;
 
             // move digit to old blank space
@@ -143,18 +147,47 @@ fn make_mapping(input: &str) -> HashMap<char, u32> {
     mapping
 }
 
-fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
-    assert!(input.chars().count() == 9, "Input string should be 9 characters long");
-    assert!(output.chars().count() == 9, "Output string should be 9 characters long");
+trait BoolExt<E> {
+    fn ok_or(&self, error: E) -> Result<(), E>;
+}
 
-    let mapping = make_mapping(input);
+impl<E> BoolExt<E> for bool {
+    fn ok_or(&self, error: E) -> Result<(), E> {
+        if *self {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
 
+fn validate_input(input: &str, output: &str) -> Result<(), SolveError> {
+    input.chars().count().eq(&9).ok_or(SolveError::InputSizeMismatch)?;
+    output.chars().count().eq(&9).ok_or(SolveError::OutputSizeMismatch)?;
+    is_permutation(input, output).ok_or(SolveError::AlphabetMismatch)
+}
+
+fn is_permutation(a: &str, b: &str) -> bool {
+    a.chars()
+        .all(|ch| a.chars().filter(|&c| c == ch).count() == b.chars().filter(|&c| c == ch).count())
+}
+
+const fn fact(mut x: usize) -> usize {
+    let mut ret = 1;
+    while x > 1 {
+        ret *= x;
+        x -= 1;
+    }
+    ret
+}
+
+const MAX: usize = fact(9);
+
+fn pack(input: &str, output: &str, mapping: &HashMap<char, u32>) -> (u32, u32) {
     let mut in_cipher: u32 = 0;
     let mut out_cipher: u32 = 0;
 
-    // FIXME: will panic if output uses alphabet > alphabet of input but not otherwise
-    // check for space and output = valid permutation of input
-    let mutator = |cipher: &mut u32, index: usize, ch: char| {
+    let pack = |cipher: &mut u32, index: usize, ch: char| {
         *cipher |= match ch {
             ' ' => to_pos(index as u32),
             _ => mapping[&ch] << (index * 3),
@@ -162,24 +195,20 @@ fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
     };
 
     for (index, (in_char, out_char)) in input.chars().zip(output.chars()).enumerate() {
-        mutator(&mut in_cipher, index, in_char);
-        mutator(&mut out_cipher, index, out_char);
+        pack(&mut in_cipher, index, in_char);
+        pack(&mut out_cipher, index, out_char);
     }
+
+    (in_cipher, out_cipher)
+}
+
+fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
+    validate_input(input, output)?;
+
+    let mut mapping = make_mapping(input);
+    let (in_cipher, out_cipher) = pack(input, output, &mapping);
 
     println!("input:  {:#034b}\noutput: {:#034b}\n", in_cipher, out_cipher);
-
-    let test: HashMap<_, _> = mapping.clone().drain().map(|(k, v)| (v, k)).collect();
-
-    const fn fact(mut x: usize) -> usize {
-        let mut ret = 1;
-        while x > 1 {
-            ret *= x;
-            x -= 1;
-        }
-        ret
-    }
-
-    const MAX: usize = fact(9);
 
     let mut arr = HashMap::with_capacity(MAX);
     let mut current_moves = Vec::with_capacity(MAX);
@@ -188,7 +217,6 @@ fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
     arr.insert(out_cipher, out_cipher);
     current_moves.push(out_cipher);
 
-    //FIXME: out_cipher?
     let mut cur: u32 = 0;
 
     while cur != in_cipher {
@@ -208,21 +236,21 @@ fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
         }
     }
 
-    let mut trace = Vec::new();
-    trace.push(cur);
+    let mut trace = vec![cur];
 
     while cur != arr[&cur] {
         cur = arr[&cur];
         trace.push(cur);
     }
 
-    //NOTE: field should implement Display, but it needs mapping..
+    let test: HashMap<_, _> = mapping.drain().map(|(k, v)| (v, k)).collect();
+
     Ok(Trace { inner: trace, mapping: test })
 }
 
 fn main() {
     match solve("12345678 ", " 87654321") {
         Ok(trace) => println!("{}", trace),
-        Err(err) => panic!("{:?}", err),
+        Err(err) => eprintln!("{:?}", err),
     }
 }
