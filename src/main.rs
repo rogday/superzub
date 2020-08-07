@@ -162,14 +162,17 @@ impl<E> BoolExt<E> for bool {
 }
 
 fn validate_input(input: &str, output: &str) -> Result<(), SolveError> {
-    input.chars().count().eq(&9).ok_or(SolveError::InputSizeMismatch)?;
-    output.chars().count().eq(&9).ok_or(SolveError::OutputSizeMismatch)?;
+    let char_count = |s: &str| s.chars().count();
+
+    (char_count(input) == 9).ok_or(SolveError::InputSizeMismatch)?;
+    (char_count(output) == 9).ok_or(SolveError::OutputSizeMismatch)?;
     is_permutation(input, output).ok_or(SolveError::AlphabetMismatch)
 }
 
 fn is_permutation(a: &str, b: &str) -> bool {
-    a.chars()
-        .all(|ch| a.chars().filter(|&c| c == ch).count() == b.chars().filter(|&c| c == ch).count())
+    let count = |s: &str, ch| s.chars().filter(|&c| c == ch).count();
+
+    a.chars().all(|ch| count(a, ch) == count(b, ch))
 }
 
 const fn fact(mut x: usize) -> usize {
@@ -225,10 +228,10 @@ fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
         for f in &[up, down, left, right] {
             let value = f(cur);
 
-            if let Entry::Vacant(entry) = arr.entry(value) {
-                entry.insert(cur);
+            arr.entry(value).or_insert_with(|| {
                 future_moves.push(value);
-            }
+                cur
+            });
         }
 
         if current_moves.is_empty() {
