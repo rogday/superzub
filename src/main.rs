@@ -31,13 +31,13 @@ enum SolveError {
 
 struct Trace {
     // According to Wiki, the longest optimal solution is 80 moves long.
-    inner:   Vec<u32>,
+    trace:   Vec<u32>,
     mapping: HashMap<u32, char>,
 }
 
 impl std::fmt::Display for Trace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.iter().try_for_each(|&field| {
+        self.trace.iter().try_for_each(|&field| {
             let blank = get_blank_pos(field);
             for i in 0..9 {
                 if i != blank {
@@ -243,9 +243,9 @@ fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
         trace.push(cur);
     }
 
-    let test: HashMap<_, _> = mapping.drain().map(|(k, v)| (v, k)).collect();
+    let mapping: HashMap<_, _> = mapping.drain().map(|(k, v)| (v, k)).collect();
 
-    Ok(Trace { inner: trace, mapping: test })
+    Ok(Trace { trace, mapping })
 }
 
 fn main() {
