@@ -12,12 +12,11 @@ use std::collections::{hash_map::Entry, HashMap};
 // | g | h | i |
 // +---+---+---+
 //
-// Note that element on (x: 2, y: 1) represents missing square.
-// This will be converted to an unsigned 32 bit integer by placing nine 3-bit tile indices from 0 to +Inf.
-// 5 bits left will be used as a position(P) of missing square, so the field above will be converted to:
-// in binary: PPPPPIII.HHHGGG__._EEEDDDC.CCBBBAAA,
-// where dots delimit bytes and 3 underscored bits is our missing square filled with some garbage values,
-// that we're not interested in.
+// Note that element on (x: 2, y: 1) represents a blank tile.
+// This will be converted to an unsigned 32 bit integer by placing nine 3-bit tile indices [0, 7], occupying 27 bits.
+// 5 bits left will be used as a position(P) of a blank tile, so that it can be found quickly.
+// The field above will be converted to in binary: PPPPPIII.HHHGGG00.0EEEDDDC.CCBBBAAA,
+// where dots delimit bytes and 3 bits owned by the blank tile are filled with zeros.
 
 #[derive(Debug)]
 enum SolveError {
@@ -29,6 +28,7 @@ enum SolveError {
     Unsolvable,
 }
 
+#[derive(Debug)]
 struct Trace {
     // According to Wiki, the longest optimal solution is 80 moves long.
     trace:   Vec<u32>,
@@ -80,64 +80,65 @@ const fn get_mask(x: u32) -> u32 {
     0b111 << (x * 3)
 }
 
-macro_rules! gen_functions {
-    ($($fn_name:ident, |$pos: ident| $in_bounds:block, $delta_pos:expr),*) => {
-        $(fn $fn_name(mut field: u32) -> u32 {
-            //extract position from field
-            let mut blank_pos = get_blank_pos(field);
+fn make_move(mut field: u32, in_bounds: fn(u32) -> bool, delta_pos: i32) -> u32 {
+    //extract position from field
+    let mut blank_pos = get_blank_pos(field);
 
-            let $pos = blank_pos;
+    if !in_bounds(blank_pos) {
+        return field;
+    }
 
-            if !$in_bounds {
-                return field;
-            }
+    // calculate new position of blank tile
+    blank_pos = (blank_pos as i32 + delta_pos) as u32;
 
-            // calculate new position of blank tile
-            blank_pos = (blank_pos as i32 + $delta_pos) as u32;
+    //FIXME: examples
+    //turn position of a number into mask on that number
+    let mask = get_mask(blank_pos);
 
-            //FIXME: examples
-            //turn position of a number into mask on that number
-            let mask = get_mask(blank_pos);
+    //extract the digit from place in which we will move blank tile
+    let masked = field & mask;
 
-            //extract the digit from place in which we will move blank tile
-            let masked = field & mask;
+    // every cell is represented using 3 bits, this converts change of
+    // position into amount of bits that need to be shifted
+    let shift = delta_pos * 3;
 
-            // every cell is represented using 3 bits, this converts change of
-            // position into amount of bits that need to be shifted
-            #[allow(clippy::neg_multiply)]
-            const SHIFT: i32 = $delta_pos * 3;
+    // move digit to old blank space
+    // negative shifts work by wrapping around so that masked << -1 becomes masked >> 1
+    let digit_new = masked.rotate_right(wrap_around(shift));
 
-            // move digit to old blank space
-            // negative shifts work by wrapping around so that masked << -1 becomes masked >> 1
-            let digit_new = masked.rotate_right(wrap_around(SHIFT));
+    //clean up garbage from blank space for digit_new to be placed in
+    field &= !mask;
 
-            //clean up garbage from blank space for digit_new to be placed in
-            field &= !mask;
+    // apply digit move
+    field |= digit_new;
 
-            // apply digit move
-            field |= digit_new;
+    // apply position change
+    field += to_pos(delta_pos as u32);
 
-            // apply position change
-            field += to_pos($delta_pos as u32);
-
-            field
-        })*
-    };
+    field
 }
 
-#[rustfmt::skip]
-gen_functions![
-    up,    |pos| { pos >= 3 },     -3i32,
-    down,  |pos| { pos <= 5 },      3i32,
-    left,  |pos| { pos % 3 != 0 }, -1i32,
-    right, |pos| { pos % 3 != 2 },  1i32
-];
+fn up(field: u32) -> u32 {
+    make_move(field, |pos| pos >= 3, -3)
+}
+
+fn down(field: u32) -> u32 {
+    make_move(field, |pos| pos <= 5, 3)
+}
+
+fn left(field: u32) -> u32 {
+    make_move(field, |pos| pos % 3 != 0, -1)
+}
+
+fn right(field: u32) -> u32 {
+    make_move(field, |pos| pos % 3 != 2, 1)
+}
 
 fn make_mapping(input: &str) -> HashMap<char, u32> {
-    let mut mapping = HashMap::new();
+    let mut mapping = HashMap::with_capacity(9);
     let mut key = 0;
 
-    for c in input.chars() {
+    for c in input.chars().filter(|&c| c != ' ') {
         if let Entry::Vacant(entry) = mapping.entry(c) {
             entry.insert(key);
             key += 1;
@@ -184,13 +185,13 @@ const fn fact(mut x: usize) -> usize {
     ret
 }
 
-const MAX: usize = fact(9);
+const MAX_CAPACITY: usize = fact(9);
 
 fn pack(input: &str, output: &str, mapping: &HashMap<char, u32>) -> (u32, u32) {
-    let mut in_cipher: u32 = 0;
-    let mut out_cipher: u32 = 0;
+    let mut in_cipher = 0;
+    let mut out_cipher = 0;
 
-    let pack = |cipher: &mut u32, index: usize, ch: char| {
+    let pack = |cipher: &mut u32, index, ch| {
         *cipher |= match ch {
             ' ' => to_pos(index as u32),
             _ => mapping[&ch] << (index * 3),
@@ -205,24 +206,25 @@ fn pack(input: &str, output: &str, mapping: &HashMap<char, u32>) -> (u32, u32) {
     (in_cipher, out_cipher)
 }
 
-fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
+fn bfs(input: &str, output: &str) -> Result<Trace, SolveError> {
     validate_input(input, output)?;
 
     let mut mapping = make_mapping(input);
-    let (in_cipher, out_cipher) = pack(input, output, &mapping);
+    let (input, output) = pack(input, output, &mapping);
+    let mapping = mapping.drain().map(|(k, v)| (v, k)).collect();
 
-    println!("input:  {:#034b}\noutput: {:#034b}\n", in_cipher, out_cipher);
+    println!("input:  {:#034b}\noutput: {:#034b}\n", input, output);
 
-    let mut arr = HashMap::with_capacity(MAX);
-    let mut current_moves = Vec::with_capacity(MAX);
-    let mut future_moves = Vec::with_capacity(MAX);
+    let mut arr = HashMap::with_capacity(MAX_CAPACITY);
+    let mut current_moves = Vec::with_capacity(MAX_CAPACITY);
+    let mut future_moves = Vec::with_capacity(MAX_CAPACITY);
 
-    arr.insert(out_cipher, out_cipher);
-    current_moves.push(out_cipher);
+    arr.insert(output, output);
+    current_moves.push(output);
 
-    let mut cur: u32 = 0;
+    let mut cur = 0;
 
-    while cur != in_cipher {
+    while cur != input {
         cur = current_moves.pop().ok_or(SolveError::Unsolvable)?;
 
         for f in &[up, down, left, right] {
@@ -246,13 +248,11 @@ fn solve(input: &str, output: &str) -> Result<Trace, SolveError> {
         trace.push(cur);
     }
 
-    let mapping: HashMap<_, _> = mapping.drain().map(|(k, v)| (v, k)).collect();
-
     Ok(Trace { trace, mapping })
 }
 
 fn main() {
-    match solve("12345678 ", " 87654321") {
+    match bfs("abcde ghi", " ihgedcba") {
         Ok(trace) => println!("{}", trace),
         Err(err) => eprintln!("{:?}", err),
     }
