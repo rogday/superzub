@@ -1,6 +1,9 @@
 #![feature(const_fn)]
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, VecDeque};
+
+use fool::BoolExt;
+use itertools::Itertools;
 
 // This program solves a variation of 15-puzzle game.
 //
@@ -20,19 +23,14 @@ use std::collections::{hash_map::Entry, HashMap};
 
 #[derive(Debug)]
 enum SolveError {
-    InputSizeMismatch,
-    OutputSizeMismatch,
-
     AlphabetMismatch,
-
     Unsolvable,
 }
 
 #[derive(Debug)]
 struct Trace {
-    // According to Wiki, the longest optimal solution is 80 moves long.
-    trace:   Vec<u32>,
-    mapping: HashMap<u32, char>,
+    // According to Wiki, the longest optimal solution is 31 moves long.
+    trace: Vec<u32>,
 }
 
 impl std::fmt::Display for Trace {
@@ -41,8 +39,7 @@ impl std::fmt::Display for Trace {
             let blank = get_blank_pos(field);
             for i in 0..9 {
                 if i != blank {
-                    let id = get_tile(field, i);
-                    write!(f, "{} ", self.mapping[&id])?;
+                    write!(f, "{} ", get_tile(field, i))?;
                 } else {
                     write!(f, "  ")?;
                 }
@@ -76,6 +73,7 @@ const fn wrap_around(x: i32) -> u32 {
     ((32 + x) % 32) as u32
 }
 
+#[inline(always)]
 const fn get_mask(x: u32) -> u32 {
     0b111 << (x * 3)
 }
@@ -106,7 +104,7 @@ fn make_move(mut field: u32, in_bounds: fn(u32) -> bool, delta_pos: i32) -> u32 
     // negative shifts work by wrapping around so that masked << -1 becomes masked >> 1
     let digit_new = masked.rotate_right(wrap_around(shift));
 
-    //clean up garbage from blank space for digit_new to be placed in
+    //clean up garbage in blank tile for future moves
     field &= !mask;
 
     // apply digit move
@@ -134,48 +132,6 @@ fn right(field: u32) -> u32 {
     make_move(field, |pos| pos % 3 != 2, 1)
 }
 
-fn make_mapping(input: &str) -> HashMap<char, u32> {
-    let mut mapping = HashMap::with_capacity(9);
-    let mut key = 0;
-
-    for c in input.chars().filter(|&c| c != ' ') {
-        if let Entry::Vacant(entry) = mapping.entry(c) {
-            entry.insert(key);
-            key += 1;
-        }
-    }
-
-    mapping
-}
-
-trait BoolExt<E> {
-    fn ok_or(&self, error: E) -> Result<(), E>;
-}
-
-impl<E> BoolExt<E> for bool {
-    fn ok_or(&self, error: E) -> Result<(), E> {
-        if *self {
-            Ok(())
-        } else {
-            Err(error)
-        }
-    }
-}
-
-fn validate_input(input: &str, output: &str) -> Result<(), SolveError> {
-    let char_count = |s: &str| s.chars().count();
-
-    (char_count(input) == 9).ok_or(SolveError::InputSizeMismatch)?;
-    (char_count(output) == 9).ok_or(SolveError::OutputSizeMismatch)?;
-    is_permutation(input, output).ok_or(SolveError::AlphabetMismatch)
-}
-
-fn is_permutation(a: &str, b: &str) -> bool {
-    let count = |s: &str, ch| s.chars().filter(|&c| c == ch).count();
-
-    a.chars().all(|ch| count(a, ch) == count(b, ch))
-}
-
 const fn fact(mut x: usize) -> usize {
     let mut ret = 1;
     while x > 1 {
@@ -185,74 +141,99 @@ const fn fact(mut x: usize) -> usize {
     ret
 }
 
-const MAX_CAPACITY: usize = fact(9);
+/// https://www.cs.bham.ac.uk/~mdr/teaching/modules04/java2/TilesSolvability.html
+///
+/// If N(in NxN puzzle) is odd, then puzzle instance is solvable if number of inversions is even in the input state.
+/// An inversion is when a tile precedes another tile with a lower number on it.
+///
+/// Proof:
+///
+/// Moving a tile along the row (left or right) doesn’t change the number of inversions,
+/// and therefore doesn’t change its polarity.
+/// Moving a tile along the column (up or down) can change the number of inversions.
+/// The tile moves past an even number of other tiles (N – 1). So move changes number of inversions by (+i - k),
+/// so i and k are both odd or even, so the change is even
+fn check_solvability(input: &[u32; 9]) -> Result<(), SolveError> {
+    let inversions = (0..9)
+        .flat_map(|i| std::iter::once(i).cartesian_product(i + 1..9))
+        .filter(|&(i, k)| input[k] != 0 && input[i] > input[k])
+        .count();
 
-fn pack(input: &str, output: &str, mapping: &HashMap<char, u32>) -> (u32, u32) {
-    let mut in_cipher = 0;
-    let mut out_cipher = 0;
-
-    let pack = |cipher: &mut u32, index, ch| {
-        *cipher |= match ch {
-            ' ' => to_pos(index as u32),
-            _ => mapping[&ch] << (index * 3),
-        };
-    };
-
-    for (index, (in_char, out_char)) in input.chars().zip(output.chars()).enumerate() {
-        pack(&mut in_cipher, index, in_char);
-        pack(&mut out_cipher, index, out_char);
-    }
-
-    (in_cipher, out_cipher)
+    (inversions % 2 == 0).ok_or(SolveError::Unsolvable)
 }
 
-fn bfs(input: &str, output: &str) -> Result<Trace, SolveError> {
-    validate_input(input, output)?;
+fn validate_input(input: &[u32; 9]) -> Result<(), SolveError> {
+    let count = |x: u32| input.iter().filter(|&&y| x == y).count();
 
-    let mut mapping = make_mapping(input);
-    let (input, output) = pack(input, output, &mapping);
-    let mapping = mapping.drain().map(|(k, v)| (v, k)).collect();
+    input.iter().all(|&x| x < 9 && count(x) == 1).ok_or(SolveError::AlphabetMismatch)
+}
 
-    println!("input:  {:#034b}\noutput: {:#034b}\n", input, output);
+fn pack(input: &[u32; 9]) -> u32 {
+    input.iter().enumerate().fold(0, |packed, (index, &tile)| {
+        packed | if tile == 0 { to_pos(index as u32) } else { (tile - 1) << (index * 3) }
+    })
+}
 
-    let mut arr = HashMap::with_capacity(MAX_CAPACITY);
-    let mut current_moves = Vec::with_capacity(MAX_CAPACITY);
-    let mut future_moves = Vec::with_capacity(MAX_CAPACITY);
+fn solve(input: &[u32; 9]) -> Result<Trace, SolveError> {
+    validate_input(input)?;
+    check_solvability(input)?;
 
-    arr.insert(output, output);
-    current_moves.push(output);
+    // +---+---+---+
+    // | 1 | 2 | 3 |
+    // | 4 | 5 | 6 |
+    // | 7 | 8 |   |
+    // +---+---+---+
+    const GOAL: u32 = 0b01000000111110101100011010001000;
 
-    let mut cur = 0;
+    let input = pack(input);
 
-    while cur != input {
-        cur = current_moves.pop().ok_or(SolveError::Unsolvable)?;
+    println!("input:  {:#034b}\noutput: {:#034b}\n", input, GOAL);
+
+    Ok(bfs(input, GOAL))
+}
+
+fn bfs(input: u32, output: u32) -> Trace {
+    const MAX_CAPACITY: usize = fact(9);
+
+    let mut tree = HashMap::with_capacity(MAX_CAPACITY);
+    let mut moves = VecDeque::with_capacity(MAX_CAPACITY);
+
+    tree.insert(output, output);
+    moves.push_back(output);
+
+    let mut current = 0;
+
+    while current != input {
+        current = moves.pop_front().unwrap();
 
         for f in &[up, down, left, right] {
-            let value = f(cur);
+            let value = f(current);
 
-            arr.entry(value).or_insert_with(|| {
-                future_moves.push(value);
-                cur
+            tree.entry(value).or_insert_with(|| {
+                moves.push_back(value);
+                current
             });
         }
-
-        if current_moves.is_empty() {
-            std::mem::swap(&mut current_moves, &mut future_moves);
-        }
     }
 
-    let mut trace = vec![cur];
+    let mut trace = vec![current];
 
-    while cur != arr[&cur] {
-        cur = arr[&cur];
-        trace.push(cur);
+    while current != tree[&current] {
+        current = tree[&current];
+        trace.push(current);
     }
 
-    Ok(Trace { trace, mapping })
+    Trace { trace }
 }
 
 fn main() {
-    match bfs("abcde ghi", " ihgedcba") {
+    #[rustfmt::skip]
+    let input = &[
+        1, 2, 3,
+        4, 5, 0,
+        6, 7, 8];
+
+    match solve(input) {
         Ok(trace) => println!("{}", trace),
         Err(err) => eprintln!("{:?}", err),
     }

@@ -7,6 +7,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
 
 [[package]]
+name = "fool"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b219e2f371596a2eab7dacc68f51a5ae76c0c94988a7ca92053f00eab37d3784"
+
+[[package]]
 name = "itertools"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -19,5 +25,6 @@ dependencies = [
 name = "superzub"
 version = "0.1.0"
 dependencies = [
+ "fool",
  "itertools",
 ]
